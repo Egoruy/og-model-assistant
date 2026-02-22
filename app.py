@@ -151,13 +151,22 @@ def chat():
     conversations[session_id].append({"role": "user", "content": user_message})
 
     try:
-        response = client.llm.chat(
-            model=og.TEE_LLM.GROK_3_MINI_BETA,
-            messages=conversations[session_id],
-            max_tokens=800,
-            temperature=0.7,
-        )
-        answer = response.chat_output["content"]
+        answer = None
+        for attempt in range(3):
+            try:
+                response = client.llm.chat(
+                    model=og.TEE_LLM.GROK_3_MINI_BETA,
+                    messages=conversations[session_id],
+                    max_tokens=800,
+                    temperature=0.7,
+                )
+                answer = response.chat_output["content"]
+                break
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(2)
+                else:
+                    raise e
         conversations[session_id].append({"role": "assistant", "content": answer})
         return jsonify({"reply": answer, "total_models": len(models)})
     except Exception as e:
@@ -185,4 +194,4 @@ def manual_sync():
 if __name__ == '__main__':
     print(f"Loaded {len(models)} models")
     print(f"Auto-sync every 24 hours")
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(debug=True, port=5000)
