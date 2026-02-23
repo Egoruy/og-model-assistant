@@ -38,6 +38,14 @@ def fetch_all_from_api():
             break
     return all_models
 
+def sync_loop():
+    # Sync immediately on start
+    time.sleep(5)
+    sync_models()
+    while True:
+        time.sleep(24 * 60 * 60)
+        sync_models()
+
 def sync_models():
     global models, models_text, SYSTEM_PROMPT
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Syncing models...")
@@ -55,8 +63,12 @@ def sync_models():
         if new_models:
             print(f"  New models: {len(new_models)}")
             existing_data["models"].extend(new_models)
-        else:
-            print(f"  No new models.")
+        
+        # Also update existing models with fresh data
+        fresh_map = {m["name"]: m for m in fresh}
+        for m in existing_data["models"]:
+            if m["name"] in fresh_map:
+                m.update(fresh_map[m["name"]])
 
         existing_data["last_updated"] = datetime.now().isoformat()
         existing_data["total"] = len(existing_data["models"])
@@ -70,14 +82,6 @@ def sync_models():
         print(f"  Total models: {len(models)}")
     except Exception as e:
         print(f"  Sync failed: {e}")
-
-def sync_loop():
-    # Sync immediately on start after 10 seconds delay
-    time.sleep(10)
-    sync_models()
-    while True:
-        time.sleep(24 * 60 * 60)
-        sync_models()
 
 def load_models():
     if os.path.exists(JSON_FILE):
@@ -205,4 +209,4 @@ def manual_sync():
 if __name__ == '__main__':
     print(f"Loaded {len(models)} models")
     print(f"Auto-sync every 24 hours")
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(debug=True, port=5000)
