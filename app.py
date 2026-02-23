@@ -209,4 +209,4 @@ def manual_sync():
 if __name__ == '__main__':
     print(f"Loaded {len(models)} models")
     print(f"Auto-sync every 24 hours")
-    app.run(debug=True, port=5000)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
