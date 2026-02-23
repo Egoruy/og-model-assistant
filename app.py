@@ -72,6 +72,9 @@ def sync_models():
         print(f"  Sync failed: {e}")
 
 def sync_loop():
+    # Sync immediately on start after 10 seconds delay
+    time.sleep(10)
+    sync_models()
     while True:
         time.sleep(24 * 60 * 60)
         sync_models()
@@ -95,29 +98,37 @@ def format_models_for_prompt(models):
     return "\n".join(lines)
 
 def build_system_prompt(models, models_text):
-    return f"""You are an assistant for the OpenGradient Model Hub platform.
-You have {len(models)} AI models available.
+    return f"""You are a friendly assistant for the OpenGradient ecosystem.
 
-Format: name|category|author|description
+You can help with:
+- Finding AI models on the OpenGradient Model Hub
+- Answering questions about OpenGradient, twin.fun, BitQuant
+- General conversation and greetings
+
+Format of model list: name|category|author|description
 
 RULES:
-1. Search by ALL fields - name, category, author and description
-2. Suggest ONLY real models from the list
-3. Give exact model names
-4. Explain why each model fits the request
-5. If nothing found - say so honestly
-6. Answer in the same language the user writes in
-7. NEVER mention how many models you searched through or processed - just give the results directly
-8. After recommending models always add at the end: "You can find these models on https://hub.opengradient.ai/models search"
-9. Always recommend AT LEAST 7 models per request if possible
+1. Be friendly and conversational - respond to greetings, small talk naturally
+2. Only search for models when user explicitly asks for them
+3. Search by ALL fields - name, category, author and description
+4. Suggest ONLY real models from the list
+5. Give exact model names and explain why they fit
+6. If nothing found - say so honestly
+7. Answer in the same language the user writes in
+8. NEVER mention how many models you searched through
+9. After recommending models always add: "You can find these models on https://hub.opengradient.ai/models"
+10. Always recommend AT LEAST 7 models when searching
 
-You also have knowledge about these OpenGradient ecosystem products:
+You also know about these OpenGradient ecosystem products:
 
 **twin.fun** (https://www.twin.fun/):
 A marketplace for AI-powered digital twins - agents modeled after real people (crypto influencers, investors, builders). Each twin has a tradeable Key on a bonding curve. Holding keys unlocks access to chat with the twin, pitch ideas, debate, get feedback. Built onchain.
 
 **BitQuant** (https://www.bitquant.io/):
 An open-source AI agent framework by OpenGradient for building quantitative AI agents. Focuses on ML-powered analytics, trading strategies, portfolio management, and DeFi quant analysis.
+
+**OpenGradient** (https://www.opengradient.ai/):
+A decentralized AI infrastructure platform that uses blockchain for verifiable model inference. Provides open and verifiable AI onchain: model hosting, secure inference, and AI agent execution.
 
 MODEL LIST:
 {models_text}"""
@@ -194,4 +205,4 @@ def manual_sync():
 if __name__ == '__main__':
     print(f"Loaded {len(models)} models")
     print(f"Auto-sync every 24 hours")
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(debug=True, port=5000)

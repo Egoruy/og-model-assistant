@@ -249,6 +249,7 @@
     margin-bottom: 8px;
     background: linear-gradient(135deg, var(--accent), var(--accent2));
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
   }
 
@@ -467,6 +468,138 @@
       height: 56px !important;
     }
   }
+
+  /* Chat History */
+  .history-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    font-family: 'Syne', sans-serif;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .history-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(0,255,136,0.05);
+  }
+
+  .history-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 100;
+    backdrop-filter: blur(4px);
+  }
+  .history-overlay.open { display: block; }
+
+  .history-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 360px;
+    height: 100vh;
+    background: #0d0d14;
+    border-left: 1px solid var(--border);
+    z-index: 101;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+  }
+  .history-panel.open { transform: translateX(0); }
+
+  .history-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .history-header h3 {
+    font-size: 15px;
+    font-weight: 700;
+  }
+  .history-close {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 4px;
+  }
+  .history-close:hover { color: var(--text); }
+
+  .history-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .history-list::-webkit-scrollbar { width: 4px; }
+  .history-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .history-item {
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .history-item:hover {
+    border-color: var(--accent);
+    background: rgba(0,255,136,0.04);
+  }
+  .history-item-date {
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 4px;
+    font-family: 'Space Mono', monospace;
+  }
+  .history-item-preview {
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .history-item-count {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .history-empty {
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 40px 20px;
+  }
+  .history-new-btn {
+    margin: 12px;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px dashed var(--border);
+    background: transparent;
+    color: var(--accent);
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .history-new-btn:hover { background: rgba(0,255,136,0.05); }
+
+  @media (max-width: 768px) {
+    .history-panel { width: 100vw; }
+  }
 </style>
 </head>
 <body>
@@ -487,9 +620,20 @@
       <div class="stat-value" style="color:#7c3aed">TEE</div>
       <div class="stat-label">Verified</div>
     </div>
+    <button class="history-btn" onclick="toggleHistory()">🕘 Chat History</button>
     <div class="status-dot"></div>
   </div>
 </header>
+
+<div class="history-overlay" id="history-overlay" onclick="toggleHistory()"></div>
+<div class="history-panel" id="history-panel">
+  <div class="history-header">
+    <h3>Chat History</h3>
+    <button class="history-close" onclick="toggleHistory()">×</button>
+  </div>
+  <button class="history-new-btn" onclick="newChat()">+ New Chat</button>
+  <div class="history-list" id="history-list"></div>
+</div>
 
 <div class="main">
   <div class="sidebar">
@@ -539,8 +683,97 @@
 </div>
 
 <script>
-  const sessionId = Math.random().toString(36).slice(2);
+  let sessionId = Math.random().toString(36).slice(2);
   let isLoading = false;
+  let currentMessages = []; // track messages for saving
+
+  // ── Chat History (localStorage) ──
+  function getSessions() {
+    try { return JSON.parse(localStorage.getItem('og_sessions') || '[]'); }
+    catch { return []; }
+  }
+  function saveSessions(sessions) {
+    localStorage.setItem('og_sessions', JSON.stringify(sessions));
+  }
+  function saveCurrentChat() {
+    if (currentMessages.length === 0) return;
+    const sessions = getSessions();
+    const existing = sessions.findIndex(s => s.id === sessionId);
+    const session = {
+      id: sessionId,
+      date: new Date().toISOString(),
+      preview: currentMessages[0]?.text?.slice(0, 60) || 'Chat',
+      messages: currentMessages
+    };
+    if (existing >= 0) sessions[existing] = session;
+    else sessions.unshift(session);
+    saveSessions(sessions.slice(0, 50)); // max 50 chats
+  }
+
+  function toggleHistory() {
+    const overlay = document.getElementById('history-overlay');
+    const panel = document.getElementById('history-panel');
+    const isOpen = panel.classList.contains('open');
+    if (isOpen) {
+      panel.classList.remove('open');
+      overlay.classList.remove('open');
+    } else {
+      renderHistoryList();
+      panel.classList.add('open');
+      overlay.classList.add('open');
+    }
+  }
+
+  function renderHistoryList() {
+    const list = document.getElementById('history-list');
+    const sessions = getSessions();
+    if (sessions.length === 0) {
+      list.innerHTML = '<div class="history-empty">No chat history yet.<br>Start a conversation!</div>';
+      return;
+    }
+    list.innerHTML = sessions.map(s => {
+      const date = new Date(s.date);
+      const dateStr = date.toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'}) + 
+                      ' ' + date.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+      return `<div class="history-item" onclick="loadSession('${s.id}')">
+        <div class="history-item-date">${dateStr}</div>
+        <div class="history-item-preview">${s.preview}...</div>
+        <div class="history-item-count">${s.messages.length} messages</div>
+      </div>`;
+    }).join('');
+  }
+
+  function loadSession(id) {
+    const sessions = getSessions();
+    const session = sessions.find(s => s.id === id);
+    if (!session) return;
+
+    // Save current chat first
+    saveCurrentChat();
+
+    sessionId = id;
+    currentMessages = session.messages;
+
+    // Render messages
+    const messagesEl = document.getElementById('messages');
+    messagesEl.innerHTML = '';
+    session.messages.forEach(m => addMessage(m.role, m.text));
+
+    toggleHistory();
+  }
+
+  function newChat() {
+    saveCurrentChat();
+    sessionId = Math.random().toString(36).slice(2);
+    currentMessages = [];
+    const messagesEl = document.getElementById('messages');
+    messagesEl.innerHTML = `<div class="welcome">
+      <img src="/static/logo.jpg" alt="OpenGradient" class="welcome-icon" style="width:72px;height:72px;border-radius:16px;object-fit:cover;margin-bottom:16px;display:block;margin-left:auto;margin-right:auto;">
+      <h2>Model Hub Assistant</h2>
+      <p>Ask me to find AI models for your task.</p>
+    </div>`;
+    toggleHistory();
+  }
 
   // Load stats
   fetch('/api/stats')
@@ -569,6 +802,12 @@
   function addMessage(role, text) {
     const welcome = document.querySelector('.welcome');
     if (welcome) welcome.remove();
+
+    // Track for history
+    if (!currentMessages.find(m => m.role === role && m.text === text)) {
+      currentMessages.push({ role, text });
+      saveCurrentChat();
+    }
 
     const messages = document.getElementById('messages');
     const div = document.createElement('div');
@@ -614,7 +853,7 @@
     div.className = 'message bot';
     div.id = 'typing-indicator';
     div.innerHTML = `
-      <div class="avatar">∇</div>
+      <div class="avatar"><img src="/static/logo.jpg" style="width:20px;height:20px;border-radius:4px;object-fit:cover;"></div>
       <div class="typing"><span></span><span></span><span></span></div>
     `;
     messages.appendChild(div);
