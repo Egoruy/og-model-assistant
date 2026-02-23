@@ -12,7 +12,7 @@ app = Flask(__name__, static_folder='static')
 CORS(app)
 
 client = og.init(
-    private_key="0x2f68df46eeec5481f1c73cb6fbd49cafd215953533aa238287b7f6a7dd955c04"
+    private_key=os.environ.get('PRIVATE_KEY')
 )
 
 JSON_FILE = "models.json"
