@@ -170,7 +170,7 @@ def chat():
         for attempt in range(3):
             try:
                 response = client.llm.chat(
-                    model=og.TEE_LLM.GROK_3_MINI_BETA,
+                    model=og.TEE_LLM.GROK_4_FAST,
                     messages=conversations[session_id],
                     max_tokens=800,
                     temperature=0.7,
