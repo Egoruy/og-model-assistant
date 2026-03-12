@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import opengradient as og
+import asyncio
 import json
 import os
 import threading
@@ -11,11 +12,18 @@ from datetime import datetime
 app = Flask(__name__, static_folder='static')
 CORS(app)
 
-client = og.init(
-    private_key=os.environ.get('PRIVATE_KEY')
-)
+# New SDK: og.LLM() instead of og.init()
+llm = og.LLM(private_key=os.environ.get('PRIVATE_KEY'))
+
+# Ensure Permit2 approval once at startup (only sends tx if allowance is low)
+try:
+    approval = llm.ensure_opg_approval(opg_amount=10.0)
+    print(f"OPG Permit2 allowance: {approval.allowance_after}")
+except Exception as e:
+    print(f"Warning: Could not ensure OPG approval: {e}")
 
 JSON_FILE = "models.json"
+
 
 def fetch_all_from_api():
     all_models = []
@@ -38,13 +46,14 @@ def fetch_all_from_api():
             break
     return all_models
 
+
 def sync_loop():
-    # Sync immediately on start
     time.sleep(5)
     sync_models()
     while True:
         time.sleep(24 * 60 * 60)
         sync_models()
+
 
 def sync_models():
     global models, models_text, SYSTEM_PROMPT
@@ -63,8 +72,7 @@ def sync_models():
         if new_models:
             print(f"  New models: {len(new_models)}")
             existing_data["models"].extend(new_models)
-        
-        # Also update existing models with fresh data
+
         fresh_map = {m["name"]: m for m in fresh}
         for m in existing_data["models"]:
             if m["name"] in fresh_map:
@@ -83,12 +91,14 @@ def sync_models():
     except Exception as e:
         print(f"  Sync failed: {e}")
 
+
 def load_models():
     if os.path.exists(JSON_FILE):
         with open(JSON_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             return data.get("models", [])
     return []
+
 
 def format_models_for_prompt(models):
     lines = []
@@ -100,6 +110,7 @@ def format_models_for_prompt(models):
         desc_short = desc[:100].replace("\n", " ").strip()
         lines.append(f"{name}|{task}|{author}|{desc_short}")
     return "\n".join(lines)
+
 
 def build_system_prompt(models, models_text):
     return f"""You are a friendly assistant for the OpenGradient ecosystem.
@@ -137,6 +148,7 @@ A decentralized AI infrastructure platform that uses blockchain for verifiable m
 MODEL LIST:
 {models_text}"""
 
+
 models = load_models()
 models_text = format_models_for_prompt(models)
 SYSTEM_PROMPT = build_system_prompt(models, models_text)
@@ -146,13 +158,16 @@ sync_thread.start()
 
 conversations = {}
 
+
 @app.route('/')
 def index():
     return send_from_directory('static', 'index.html')
 
+
 @app.route('/static/<path:filename>')
 def static_files(filename):
     return send_from_directory('static', filename)
+
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
@@ -169,12 +184,13 @@ def chat():
         answer = None
         for attempt in range(3):
             try:
-                response = client.llm.chat(
+                # New SDK: async llm.chat() wrapped with asyncio.run()
+                response = asyncio.run(llm.chat(
                     model=og.TEE_LLM.GROK_4_FAST,
                     messages=conversations[session_id],
                     max_tokens=800,
                     temperature=0.7,
-                )
+                ))
                 answer = response.chat_output["content"]
                 break
             except Exception as e:
@@ -182,10 +198,12 @@ def chat():
                     time.sleep(2)
                 else:
                     raise e
+
         conversations[session_id].append({"role": "assistant", "content": answer})
         return jsonify({"reply": answer, "total_models": len(models)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route('/api/stats')
 def stats():
@@ -201,10 +219,12 @@ def stats():
         "last_updated": last_sync
     })
 
+
 @app.route('/api/sync', methods=['POST'])
 def manual_sync():
     threading.Thread(target=sync_models, daemon=True).start()
     return jsonify({"status": "sync started"})
+
 
 if __name__ == '__main__':
     print(f"Loaded {len(models)} models")
