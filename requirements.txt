@@ -2,3 +2,4 @@ flask
 flask-cors
 opengradient==0.8.0
 requests
+nest_asyncio
