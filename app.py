@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import opengradient as og
 import asyncio
+import nest_asyncio
 import json
 import os
 import threading
@@ -9,13 +10,13 @@ import time
 import requests
 from datetime import datetime
 
+nest_asyncio.apply()
+
 app = Flask(__name__, static_folder='static')
 CORS(app)
 
-# New SDK: og.LLM() instead of og.init()
 llm = og.LLM(private_key=os.environ.get('PRIVATE_KEY'))
 
-# Ensure Permit2 approval once at startup (only sends tx if allowance is low)
 try:
     approval = llm.ensure_opg_approval(opg_amount=10.0)
     print(f"OPG Permit2 allowance: {approval.allowance_after}")
@@ -184,7 +185,6 @@ def chat():
         answer = None
         for attempt in range(3):
             try:
-                # New SDK: async llm.chat() wrapped with asyncio.run()
                 response = asyncio.run(llm.chat(
                     model=og.TEE_LLM.GROK_4_FAST,
                     messages=conversations[session_id],
@@ -202,6 +202,8 @@ def chat():
         conversations[session_id].append({"role": "assistant", "content": answer})
         return jsonify({"reply": answer, "total_models": len(models)})
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 
