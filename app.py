@@ -9,10 +9,6 @@ import threading
 import time
 import requests
 from datetime import datetime
-import ssl
-
-ssl._create_default_https_context = ssl._create_unverified_context
-
 nest_asyncio.apply()
 
 app = Flask(__name__, static_folder='static')
