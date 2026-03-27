@@ -8,111 +8,75 @@ import os
 import threading
 import time
 import requests
+import logging
 from datetime import datetime
+
+# ── Logging setup ──────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+# ── Async fix ──────────────────────────────────────────────────────────────────
 nest_asyncio.apply()
 
+# ── App setup ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder='static')
 CORS(app)
 
+# ── OG client ─────────────────────────────────────────────────────────────────
+log.info("Initializing OpenGradient LLM client...")
 llm = og.LLM(private_key=os.environ.get('PRIVATE_KEY'))
 
 try:
-    approval = llm.ensure_opg_approval(opg_amount=10.0)
-    print(f"OPG Permit2 allowance: {approval.allowance_after}")
+    approval = llm.ensure_opg_approval(opg_amount=4.0)
+    log.info(f"OPG Permit2 allowance: {approval.allowance_after}")
 except Exception as e:
-    print(f"Warning: Could not ensure OPG approval: {e}")
+    log.warning(f"Could not ensure OPG approval: {e}")
 
+# ── Constants ─────────────────────────────────────────────────────────────────
 JSON_FILE = "models.json"
+MAX_MODELS_IN_PROMPT = 50  # не вставляем все 2000+ в промпт
+models = []
+models_text = ""
+SYSTEM_PROMPT = ""
 
 
-def fetch_all_from_api():
-    all_models = []
-    page = 0
-    limit = 100
-    while True:
-        try:
-            url = f"https://hub-api.opengradient.ai/api/v0/models/?page={page}&limit={limit}"
-            r = requests.get(url, timeout=10)
-            data = r.json()
-            batch = data.get("models", data) if isinstance(data, dict) else data
-            if not batch:
-                break
-            all_models.extend(batch)
-            if len(batch) < limit:
-                break
-            page += 1
-        except Exception as e:
-            print(f"Sync error page {page}: {e}")
-            break
-    return all_models
-
-
-def sync_loop():
-    time.sleep(5)
-    sync_models()
-    while True:
-        time.sleep(24 * 60 * 60)
-        sync_models()
-
-
-def sync_models():
-    global models, models_text, SYSTEM_PROMPT
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Syncing models...")
-    try:
-        if os.path.exists(JSON_FILE):
-            with open(JSON_FILE, "r", encoding="utf-8") as f:
-                existing_data = json.load(f)
-        else:
-            existing_data = {"models": [], "last_updated": None, "total": 0}
-
-        existing_names = {m["name"] for m in existing_data["models"]}
-        fresh = fetch_all_from_api()
-        new_models = [m for m in fresh if m["name"] not in existing_names]
-
-        if new_models:
-            print(f"  New models: {len(new_models)}")
-            existing_data["models"].extend(new_models)
-
-        fresh_map = {m["name"]: m for m in fresh}
-        for m in existing_data["models"]:
-            if m["name"] in fresh_map:
-                m.update(fresh_map[m["name"]])
-
-        existing_data["last_updated"] = datetime.now().isoformat()
-        existing_data["total"] = len(existing_data["models"])
-
-        with open(JSON_FILE, "w", encoding="utf-8") as f:
-            json.dump(existing_data, f, ensure_ascii=False, indent=2)
-
-        models = existing_data["models"]
-        models_text = format_models_for_prompt(models)
-        SYSTEM_PROMPT = build_system_prompt(models, models_text)
-        print(f"  Total models: {len(models)}")
-    except Exception as e:
-        print(f"  Sync failed: {e}")
-
-
-def load_models():
-    if os.path.exists(JSON_FILE):
-        with open(JSON_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data.get("models", [])
-    return []
-
-
-def format_models_for_prompt(models):
-    lines = []
+# ── Model search ──────────────────────────────────────────────────────────────
+def search_models(query: str, top_n: int = MAX_MODELS_IN_PROMPT) -> list:
+    """Keyword search across name, task, author, description."""
+    if not query:
+        return models[:top_n]
+    keywords = query.lower().split()
+    scored = []
     for m in models:
+        text = " ".join([
+            m.get("name", ""),
+            m.get("taskName") or "",
+            m.get("authorUsername") or "",
+            m.get("description") or "",
+        ]).lower()
+        score = sum(1 for kw in keywords if kw in text)
+        if score > 0:
+            scored.append((score, m))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [m for _, m in scored[:top_n]]
+
+
+def format_models_for_prompt(model_list: list) -> str:
+    lines = []
+    for m in model_list:
         name = m.get("name", "")
         task = m.get("taskName") or ""
-        desc = m.get("description") or ""
         author = m.get("authorUsername") or ""
-        desc_short = desc[:100].replace("\n", " ").strip()
-        lines.append(f"{name}|{task}|{author}|{desc_short}")
+        desc = (m.get("description") or "")[:100].replace("\n", " ").strip()
+        lines.append(f"{name}|{task}|{author}|{desc}")
     return "\n".join(lines)
 
 
-def build_system_prompt(models, models_text):
+def build_system_prompt(models_snippet: str) -> str:
     return f"""You are a friendly assistant for the OpenGradient ecosystem.
 
 You can help with:
@@ -145,13 +109,87 @@ An open-source AI agent framework by OpenGradient for building quantitative AI a
 **OpenGradient** (https://www.opengradient.ai/):
 A decentralized AI infrastructure platform that uses blockchain for verifiable model inference. Provides open and verifiable AI onchain: model hosting, secure inference, and AI agent execution.
 
-MODEL LIST:
-{models_text}"""
+MODEL LIST (most relevant to current query):
+{models_snippet}"""
 
 
+# ── Sync logic ────────────────────────────────────────────────────────────────
+def fetch_all_from_api():
+    all_models = []
+    page = 0
+    limit = 100
+    while True:
+        try:
+            url = f"https://hub-api.opengradient.ai/api/v0/models/?page={page}&limit={limit}"
+            r = requests.get(url, timeout=10)
+            data = r.json()
+            batch = data.get("models", data) if isinstance(data, dict) else data
+            if not batch:
+                break
+            all_models.extend(batch)
+            if len(batch) < limit:
+                break
+            page += 1
+        except Exception as e:
+            log.error(f"Sync error page {page}: {e}")
+            break
+    return all_models
+
+
+def sync_models():
+    global models
+    log.info("Syncing models from Hub API...")
+    try:
+        if os.path.exists(JSON_FILE):
+            with open(JSON_FILE, "r", encoding="utf-8") as f:
+                existing_data = json.load(f)
+        else:
+            existing_data = {"models": [], "last_updated": None, "total": 0}
+
+        existing_names = {m["name"] for m in existing_data["models"]}
+        fresh = fetch_all_from_api()
+        new_models = [m for m in fresh if m["name"] not in existing_names]
+
+        if new_models:
+            log.info(f"New models found: {len(new_models)}")
+            existing_data["models"].extend(new_models)
+
+        fresh_map = {m["name"]: m for m in fresh}
+        for m in existing_data["models"]:
+            if m["name"] in fresh_map:
+                m.update(fresh_map[m["name"]])
+
+        existing_data["last_updated"] = datetime.now().isoformat()
+        existing_data["total"] = len(existing_data["models"])
+
+        with open(JSON_FILE, "w", encoding="utf-8") as f:
+            json.dump(existing_data, f, ensure_ascii=False, indent=2)
+
+        models = existing_data["models"]
+        log.info(f"Sync complete. Total models: {len(models)}")
+    except Exception as e:
+        log.error(f"Sync failed: {e}")
+
+
+def sync_loop():
+    time.sleep(5)
+    sync_models()
+    while True:
+        time.sleep(24 * 60 * 60)
+        sync_models()
+
+
+def load_models():
+    if os.path.exists(JSON_FILE):
+        with open(JSON_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("models", [])
+    return []
+
+
+# ── Init ──────────────────────────────────────────────────────────────────────
 models = load_models()
-models_text = format_models_for_prompt(models)
-SYSTEM_PROMPT = build_system_prompt(models, models_text)
+log.info(f"Loaded {len(models)} models from cache")
 
 sync_thread = threading.Thread(target=sync_loop, daemon=True)
 sync_thread.start()
@@ -159,6 +197,7 @@ sync_thread.start()
 conversations = {}
 
 
+# ── Routes ────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
     return send_from_directory('static', 'index.html')
@@ -175,34 +214,54 @@ def chat():
     session_id = data.get('session_id', 'default')
     user_message = data.get('message', '')
 
-    if session_id not in conversations:
-        conversations[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    log.info(f"[session={session_id}] User: {user_message[:80]}")
 
-    conversations[session_id].append({"role": "user", "content": user_message})
+    # Smart model search — only inject relevant models into prompt
+    relevant = search_models(user_message)
+    relevant_text = format_models_for_prompt(relevant)
+    dynamic_system_prompt = build_system_prompt(relevant_text)
+
+    if session_id not in conversations:
+        conversations[session_id] = []
+
+    # Always use fresh system prompt with relevant models
+    messages = [{"role": "system", "content": dynamic_system_prompt}] + conversations[session_id]
+    messages.append({"role": "user", "content": user_message})
 
     try:
         answer = None
         for attempt in range(3):
             try:
+                log.info(f"[session={session_id}] Calling LLM (attempt {attempt + 1})...")
                 response = asyncio.run(llm.chat(
                     model=og.TEE_LLM.GROK_4_FAST,
-                    messages=conversations[session_id],
+                    messages=messages,
                     max_tokens=800,
                     temperature=0.7,
                 ))
                 answer = response.chat_output["content"]
+                log.info(f"[session={session_id}] LLM responded ({len(answer)} chars)")
                 break
             except Exception as e:
+                log.warning(f"[session={session_id}] LLM attempt {attempt + 1} failed: {e}")
                 if attempt < 2:
                     time.sleep(2)
                 else:
                     raise e
 
+        # Store only user/assistant turns (not system)
+        conversations[session_id].append({"role": "user", "content": user_message})
         conversations[session_id].append({"role": "assistant", "content": answer})
+
+        # Keep conversation history manageable (last 20 messages)
+        if len(conversations[session_id]) > 20:
+            conversations[session_id] = conversations[session_id][-20:]
+
         return jsonify({"reply": answer, "total_models": len(models)})
+
     except Exception as e:
         import traceback
-        print(traceback.format_exc())
+        log.error(f"[session={session_id}] Chat error:\n{traceback.format_exc()}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -228,6 +287,5 @@ def manual_sync():
 
 
 if __name__ == '__main__':
-    print(f"Loaded {len(models)} models")
-    print(f"Auto-sync every 24 hours")
+    log.info(f"Starting server on port {os.environ.get('PORT', 5000)}")
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
