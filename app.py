@@ -31,7 +31,7 @@ log.info("Initializing OpenGradient LLM client...")
 llm = og.LLM(private_key=os.environ.get('PRIVATE_KEY'))
 
 try:
-    approval = llm.ensure_opg_approval(opg_amount=5.0)
+    approval = llm.ensure_opg_approval(min_allowance=5.0)
     log.info(f"OPG Permit2 allowance after: {approval.allowance_after}")
 except Exception as e:
     log.warning(f"Could not ensure OPG approval: {e}")
@@ -39,10 +39,10 @@ except Exception as e:
 # ── Model selection — fallback list ───────────────────────────────────────────
 # Try models in order until one works (в случае если одна недоступна)
 PREFERRED_MODELS = [
-    og.TEE_LLM.GROK_3_MINI_BETA,   # быстрая и дешёвая
-    og.TEE_LLM.GROK_3_BETA,
+    og.TEE_LLM.GROK_4_FAST,           # быстрая
+    og.TEE_LLM.GROK_4_1_FAST,
     og.TEE_LLM.GPT_4_1_2025_04_14,
-    og.TEE_LLM.GPT_4O,
+    og.TEE_LLM.GEMINI_2_5_FLASH,
 ]
 
 # ── Constants ─────────────────────────────────────────────────────────────────
