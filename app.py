@@ -31,18 +31,24 @@ log.info("Initializing OpenGradient LLM client...")
 llm = og.LLM(private_key=os.environ.get('PRIVATE_KEY'))
 
 try:
-    approval = llm.ensure_opg_approval(opg_amount=4.0)
-    log.info(f"OPG Permit2 allowance: {approval.allowance_after}")
+    approval = llm.ensure_opg_approval(opg_amount=5.0)
+    log.info(f"OPG Permit2 allowance after: {approval.allowance_after}")
 except Exception as e:
     log.warning(f"Could not ensure OPG approval: {e}")
 
+# ── Model selection — fallback list ───────────────────────────────────────────
+# Try models in order until one works (в случае если одна недоступна)
+PREFERRED_MODELS = [
+    og.TEE_LLM.GROK_3_MINI_BETA,   # быстрая и дешёвая
+    og.TEE_LLM.GROK_3_BETA,
+    og.TEE_LLM.GPT_4_1_2025_04_14,
+    og.TEE_LLM.GPT_4O,
+]
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 JSON_FILE = "models.json"
-MAX_MODELS_IN_PROMPT = 50  # не вставляем все 2000+ в промпт
+MAX_MODELS_IN_PROMPT = 50
 models = []
-models_text = ""
-SYSTEM_PROMPT = ""
-
 
 # ── Model search ──────────────────────────────────────────────────────────────
 def search_models(query: str, top_n: int = MAX_MODELS_IN_PROMPT) -> list:
@@ -113,7 +119,7 @@ MODEL LIST (most relevant to current query):
 {models_snippet}"""
 
 
-# ── Sync logic ────────────────────────────────────────────────────────────────
+# ── Hub sync ──────────────────────────────────────────────────────────────────
 def fetch_all_from_api():
     all_models = []
     page = 0
@@ -187,6 +193,29 @@ def load_models():
     return []
 
 
+# ── LLM call with model fallback ──────────────────────────────────────────────
+async def call_llm_with_fallback(messages: list, max_tokens: int = 800, temperature: float = 0.7):
+    """Try each model in PREFERRED_MODELS until one succeeds."""
+    last_error = None
+    for model in PREFERRED_MODELS:
+        try:
+            log.info(f"Trying model: {model}")
+            response = await llm.chat(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                x402_settlement_mode=og.x402SettlementMode.BATCH_HASHED,
+            )
+            log.info(f"Success with model: {model}")
+            return response.chat_output["content"]
+        except Exception as e:
+            log.warning(f"Model {model} failed: {e}")
+            last_error = e
+            continue
+    raise last_error
+
+
 # ── Init ──────────────────────────────────────────────────────────────────────
 models = load_models()
 log.info(f"Loaded {len(models)} models from cache")
@@ -216,7 +245,6 @@ def chat():
 
     log.info(f"[session={session_id}] User: {user_message[:80]}")
 
-    # Smart model search — only inject relevant models into prompt
     relevant = search_models(user_message)
     relevant_text = format_models_for_prompt(relevant)
     dynamic_system_prompt = build_system_prompt(relevant_text)
@@ -224,7 +252,6 @@ def chat():
     if session_id not in conversations:
         conversations[session_id] = []
 
-    # Always use fresh system prompt with relevant models
     messages = [{"role": "system", "content": dynamic_system_prompt}] + conversations[session_id]
     messages.append({"role": "user", "content": user_message})
 
@@ -233,27 +260,19 @@ def chat():
         for attempt in range(3):
             try:
                 log.info(f"[session={session_id}] Calling LLM (attempt {attempt + 1})...")
-                response = asyncio.run(llm.chat(
-                    model=og.TEE_LLM.GROK_4_FAST,
-                    messages=messages,
-                    max_tokens=800,
-                    temperature=0.7,
-                ))
-                answer = response.chat_output["content"]
+                answer = asyncio.run(call_llm_with_fallback(messages))
                 log.info(f"[session={session_id}] LLM responded ({len(answer)} chars)")
                 break
             except Exception as e:
-                log.warning(f"[session={session_id}] LLM attempt {attempt + 1} failed: {e}")
+                log.warning(f"[session={session_id}] Attempt {attempt + 1} failed: {e}")
                 if attempt < 2:
                     time.sleep(2)
                 else:
                     raise e
 
-        # Store only user/assistant turns (not system)
         conversations[session_id].append({"role": "user", "content": user_message})
         conversations[session_id].append({"role": "assistant", "content": answer})
 
-        # Keep conversation history manageable (last 20 messages)
         if len(conversations[session_id]) > 20:
             conversations[session_id] = conversations[session_id][-20:]
 
